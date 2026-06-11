@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1",
+  "run_id": "qsim-chat-cont64-rho070-seed0",
+  "source": "sim",
+  "created_at": "2026-06-11T07:05:39.506795-07:00",
+  "repo": "llm-inference-queueing",
+  "config": {
+    "profile": "chat",
+    "offered_load": 0.7,
+    "seed": 0,
+    "n": 1500,
+    "cost_model": "placeholder-7b-a10",
+    "engine": "simulate_continuous"
+  },
+  "environment": {
+    "machine": "m3-pro",
+    "notes": "discrete-event simulation"
+  },
+  "n_requests": 1500,
+  "git_commit": null
+}
