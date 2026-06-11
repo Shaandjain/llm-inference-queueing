@@ -78,6 +78,7 @@ def main():
     ap.add_argument("--reps", type=int, default=4)
     ap.add_argument("--max-tokens", type=int, default=48)
     ap.add_argument("--machine", default="m3-pro")
+    ap.add_argument("--api-key", default=None)
     args = ap.parse_args()
 
     lengths = [32, 64, 128, 256, 512, 1024, 1536, 2048, 3072, 4096]
@@ -85,7 +86,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     run_id = f"live-{args.model.replace(':', '-').replace('/', '-')}-{datetime.now():%Y%m%d-%H%M%S}"
 
-    client = httpx.Client()
+    headers = {"Authorization": f"Bearer {args.api_key}"} if args.api_key else {}
+    client = httpx.Client(headers=headers)
     print("warmup...")
     for _ in range(2):
         stream_request(client, args.base_url, args.model, build_prompt(64, "warmup"), 16)
