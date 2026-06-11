@@ -1,0 +1,9 @@
+{
+  "prefill_base_s": 0.010193,
+  "prefill_per_token_s": 0.00192523,
+  "decode_base_s": 0.024084,
+  "decode_per_seq_s": 0.0,
+  "decode_per_kv_token_s": 0.0,
+  "kv_capacity_tokens": 32768,
+  "label": "m3pro-ollama-qwen2.5-3b"
+}
