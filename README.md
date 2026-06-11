@@ -4,7 +4,9 @@ Discrete-event simulator for LLM inference serving: how batching policy, arrival
 
 **Research question:** When does batching improve throughput while hurting tail latency?
 
-**Status:** in progress (week 2 of 2). Simulator validated against real vLLM on an NVIDIA L4: e2e latency predicted within 13% after error attribution (see Validation).
+**Status:** core complete. Simulator validated against real vLLM on an NVIDIA L4: e2e latency predicted within 13% after error attribution (see Validation).
+
+**Paper:** [Queueing the Transformer (PDF)](paper/queueing-the-transformer.pdf) · blog draft in [`paper/blog-post.md`](paper/blog-post.md)
 
 ## Quickstart
 
@@ -38,6 +40,10 @@ Workload profiles (`chat`, `rag`, `agent`) are lognormal token-length distributi
 3. **"Busy" is a useless health signal:** busy-time utilization is ≥0.97 at *every* load level from 30% to 98% of capacity — the server is never idle, it just runs underfilled batches. Batch occupancy is the metric that actually tracks load. ([plot](analysis/plots/02_p95_vs_utilization.png))
 4. **Burstiness ~doubles p95 TTFT at the same mean rate** (agent workload, on/off arrivals at 4× burst intensity vs Poisson). Mean load is not enough to predict tails. ([plot](analysis/plots/03_burstiness.png))
 
+![Continuous vs static batching](analysis/plots/01_load_sweep.png)
+
+![Busy saturates immediately; occupancy is the real signal](analysis/plots/02_p95_vs_utilization.png)
+
 ## Validation against real vLLM (Modal L4, Qwen2.5-7B-Instruct)
 
 Can the simulator *predict* a real serving system? Protocol: fit coefficients from a sequential prompt-length sweep (prefill: 271.6ms + 0.288ms/token, R²=0.887) and a concurrency sweep (decode: 56.9ms + 0.67ms/seq over c∈[1,32], R²=0.702), then replay two held-out Poisson workloads (250 requests each, exact output lengths forced via `ignore_eos`) open-loop against the server, and compare predicted vs observed distributions on identical request sets.
@@ -50,6 +56,8 @@ Can the simulator *predict* a real serving system? Protocol: fit coefficients fr
 | overhead-attributed @ 1.17 rps | −15% | −33% | **+13%** | **+11%** |
 
 **The error had a diagnosable cause.** The raw model overestimated e2e latency 37–60% because the fitted 272ms prefill intercept — which is mostly per-request overhead (network RTT, API processing, tokenization) — gets charged by the simulator as GPU-blocking time on *every prefill iteration*, stalling all decodes. Real vLLM overlaps chunked prefill with decode. Reattributing 240ms of the intercept to non-blocking per-request overhead (`--request-overhead-s` ablation) collapses e2e error to +6–13% at both load levels ([CDFs](analysis/plots/05_validation_overhead-ablation.png), `results/validation*.json`). The remaining TTFT p95 gap (−33%) is real: observed TTFT has scheduling variance a constant offset can't model.
+
+![Predicted vs observed CDFs](analysis/plots/05_validation_overhead-ablation.png)
 
 Run it: `serving/vllm_modal.py` (deploy/stop on Modal), then `capture_traces.py` → `concurrency_sweep.py` → `fit_coefficients.py` → `replay_workload.py` → `analysis/validate.py`. GPU cost for the full protocol: ~$1 on an L4.
 

@@ -1,0 +1,11 @@
+(APIServer pid=5)     return get_tokenizer(
+(APIServer pid=5)            ^^^^^^^^^^^^^^
+(APIServer pid=5)   File "/usr/local/lib/python3.12/site-packages/vllm/transformers_utils/tokenizer.py", line 256, in get_tokenizer
+(APIServer pid=5)     tokenizer = get_cached_tokenizer(tokenizer)
+(APIServer pid=5)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=5)   File "/usr/local/lib/python3.12/site-packages/vllm/transformers_utils/tokenizer.py", line 99, in get_cached_tokenizer
+(APIServer pid=5)     tokenizer.all_special_tokens_extended)
+(APIServer pid=5)     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=5)   File "/usr/local/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 1316, in __getattr__
+(APIServer pid=5)     raise AttributeError(f"{self.__class__.__name__} has no attribute {key}")
+(APIServer pid=5) AttributeError: Qwen2Tokenizer has no attribute all_special_tokens_extended. Did you mean: 'num_special_tokens_to_add'?

@@ -8,12 +8,14 @@ Modal web endpoints are public URLs. Container scales to zero after 5 idle
 minutes; weights persist in the `hf-cache` volume so reboots are fast.
 """
 
+import os
 import subprocess
 
 import modal
 
 MODEL = "Qwen/Qwen2.5-7B-Instruct"
-API_KEY = "inference-summer-validation"  # not a secret that matters; gates a transient bench endpoint
+# gates a transient bench endpoint; override per deploy: VLLM_API_KEY=... modal deploy ...
+API_KEY = os.environ.get("VLLM_API_KEY", "inference-summer-validation")
 PORT = 8000
 
 image = (
