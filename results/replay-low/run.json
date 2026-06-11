@@ -1,0 +1,25 @@
+{
+  "schema_version": "0.1",
+  "run_id": "replay-chat-r0.73-20260611-095910",
+  "source": "live",
+  "created_at": "2026-06-11T10:05:05.974208-07:00",
+  "repo": "llm-inference-queueing",
+  "config": {
+    "base_url": "https://shaandjain--vllm-l4-qwen7b-serve.modal.run/v1",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "api_key": "inference-summer-validation",
+    "profile": "chat",
+    "rate": 0.73,
+    "n": 250,
+    "seed": 42,
+    "arrival": "poisson",
+    "out": "results/replay-low",
+    "machine": "modal-l4"
+  },
+  "environment": {
+    "machine": "modal-l4",
+    "notes": "open-loop workload replay for sim validation"
+  },
+  "n_requests": 250,
+  "git_commit": null
+}

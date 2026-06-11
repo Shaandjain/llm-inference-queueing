@@ -1,0 +1,9 @@
+{
+  "prefill_base_s": 0.271581,
+  "prefill_per_token_s": 0.00028809,
+  "decode_base_s": 0.056847,
+  "decode_per_seq_s": 0.00067336,
+  "decode_per_kv_token_s": 0.0,
+  "kv_capacity_tokens": 120000,
+  "label": "modal-l4-vllm-qwen2.5-7b"
+}

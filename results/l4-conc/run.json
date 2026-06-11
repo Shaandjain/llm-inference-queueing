@@ -1,0 +1,31 @@
+{
+  "schema_version": "0.1",
+  "run_id": "conc-20260611-095631",
+  "source": "live",
+  "created_at": "2026-06-11T09:58:24.310850-07:00",
+  "repo": "llm-inference-queueing",
+  "config": {
+    "base_url": "https://shaandjain--vllm-l4-qwen7b-serve.modal.run/v1",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "api_key": "inference-summer-validation",
+    "out": "results/l4-conc",
+    "machine": "modal-l4",
+    "levels": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32
+    ],
+    "rounds": 2,
+    "prompt_tokens": 512,
+    "output_tokens": 128
+  },
+  "environment": {
+    "machine": "modal-l4",
+    "notes": "concurrency sweep for decode_per_seq fit"
+  },
+  "n_requests": 126,
+  "git_commit": null
+}

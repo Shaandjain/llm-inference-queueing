@@ -4,7 +4,7 @@ Discrete-event simulator for LLM inference serving: how batching policy, arrival
 
 **Research question:** When does batching improve throughput while hurting tail latency?
 
-**Status:** in progress (week 1 of 2). Simulator, experiments, and live coefficient fitting working end-to-end.
+**Status:** in progress (week 2 of 2). Simulator validated against real vLLM on an NVIDIA L4: e2e latency predicted within 13% after error attribution (see Validation).
 
 ## Quickstart
 
@@ -38,7 +38,22 @@ Workload profiles (`chat`, `rag`, `agent`) are lognormal token-length distributi
 3. **"Busy" is a useless health signal:** busy-time utilization is ≥0.97 at *every* load level from 30% to 98% of capacity — the server is never idle, it just runs underfilled batches. Batch occupancy is the metric that actually tracks load. ([plot](analysis/plots/02_p95_vs_utilization.png))
 4. **Burstiness ~doubles p95 TTFT at the same mean rate** (agent workload, on/off arrivals at 4× burst intensity vs Poisson). Mean load is not enough to predict tails. ([plot](analysis/plots/03_burstiness.png))
 
-## Live validation (M3 Pro, Ollama, qwen2.5:3b)
+## Validation against real vLLM (Modal L4, Qwen2.5-7B-Instruct)
+
+Can the simulator *predict* a real serving system? Protocol: fit coefficients from a sequential prompt-length sweep (prefill: 271.6ms + 0.288ms/token, R²=0.887) and a concurrency sweep (decode: 56.9ms + 0.67ms/seq over c∈[1,32], R²=0.702), then replay two held-out Poisson workloads (250 requests each, exact output lengths forced via `ignore_eos`) open-loop against the server, and compare predicted vs observed distributions on identical request sets.
+
+| | p50 TTFT err | p95 TTFT err | p50 e2e err | p95 e2e err |
+|---|---|---|---|---|
+| raw fitted model @ 0.73 rps | −12% | −7% | +37% | +41% |
+| raw fitted model @ 1.17 rps | −10% | −3% | +60% | +51% |
+| overhead-attributed @ 0.73 rps | −15% | −33% | **+6%** | **+9%** |
+| overhead-attributed @ 1.17 rps | −15% | −33% | **+13%** | **+11%** |
+
+**The error had a diagnosable cause.** The raw model overestimated e2e latency 37–60% because the fitted 272ms prefill intercept — which is mostly per-request overhead (network RTT, API processing, tokenization) — gets charged by the simulator as GPU-blocking time on *every prefill iteration*, stalling all decodes. Real vLLM overlaps chunked prefill with decode. Reattributing 240ms of the intercept to non-blocking per-request overhead (`--request-overhead-s` ablation) collapses e2e error to +6–13% at both load levels ([CDFs](analysis/plots/05_validation_overhead-ablation.png), `results/validation*.json`). The remaining TTFT p95 gap (−33%) is real: observed TTFT has scheduling variance a constant offset can't model.
+
+Run it: `serving/vllm_modal.py` (deploy/stop on Modal), then `capture_traces.py` → `concurrency_sweep.py` → `fit_coefficients.py` → `replay_workload.py` → `analysis/validate.py`. GPU cost for the full protocol: ~$1 on an L4.
+
+## Coefficient fitting also works locally (M3 Pro, Ollama, qwen2.5:3b)
 
 The linear prefill model fits real hardware well: TTFT = 10.2ms + 1.93ms/token, **R² = 0.999** over a 63–2,869-token sweep (40 requests). Implied prefill throughput ~519 tok/s; decode 24.1ms/token (~42 tok/s at batch 1). Fitted profile: `profiles/m3pro-ollama-qwen2.5-3b.json`.
 
@@ -48,12 +63,13 @@ The linear prefill model fits real hardware well: TTFT = 10.2ms + 1.93ms/token, 
 
 - Simulation experiments use hand-set placeholder coefficients (`CostModel` defaults), not fitted GPU numbers. Magnitudes are illustrative; the *comparisons* (continuous vs static, burstiness) are the claims.
 - KV footprint (input + output) is reserved at admission — the scheduler effectively knows output lengths in advance. No preemption/recompute is modeled.
-- Decode batch-size coefficient (`decode_per_seq_s`) is unfitted (needs a concurrency sweep; Ollama serializes by default).
-- Prefill-prioritized scheduling only; no chunked-prefill/decode interleaving cost model.
-- Apple Silicon numbers validate the *model structure*, not NVIDIA magnitudes.
+- Prefill-prioritized scheduling only; no chunked-prefill/decode interleaving cost model — this is the main source of e2e overprediction, partially corrected by the overhead ablation rather than properly modeled.
+- The 240ms request-overhead split is an ablation estimate, not independently measured (would need server-side metrics or a localhost benchmark to separate network/API/tokenize from GPU time).
+- TTFT prediction is a point estimate; observed TTFT variance (scheduling jitter) is unmodeled, so predicted tails are too tight.
+- Validation covers one model/GPU/workload (Qwen2.5-7B on L4, chat profile, Poisson) at two load levels below saturation.
 
-## Next (week 2)
+## Next
 
-- Concurrency sweep to fit `decode_per_seq_s`; validate simulator predictions against a real vLLM endpoint on Modal (predicted vs observed p50/p95).
+- Model chunked prefill (mixed prefill/decode iterations) instead of the overhead ablation.
 - Additional schedulers: shortest-prefill-first, deadline-aware.
 - Writeup: "LLM Inference as an Operations Research Problem."
