@@ -24,18 +24,18 @@ a validated discrete-event model of batched serving}
 
 \begin{abstract}
 \noindent
-LLM serving systems are queueing systems: requests arrive stochastically, occupy a batched server through distinct prefill and decode phases, and contend for KV-cache memory. I built a discrete-event simulator of batched LLM inference on a deliberately small cost model --- two linear coefficients per phase --- and asked whether it can \emph{predict} a real serving system rather than merely illustrate one. Fitting the model from 40 sequential probe requests and a concurrency sweep against vLLM running Qwen2.5-7B-Instruct on an NVIDIA L4, then replaying held-out Poisson workloads open-loop, the simulator predicted median time-to-first-token within 12\% and, after correcting a systematic error, end-to-end latency percentiles within 6--13\% at both 50\% and 80\% of saturation load. The correction itself is the most transferable finding: a latency intercept fitted over a network conflates per-request overhead with per-iteration GPU time, and charging it as GPU-blocking time inflates predicted tail latency by 37--60\%. Along the way the simulation reproduces the canonical continuous-vs-static batching results and surfaces an under-stated operational fact: busy-time ``utilization'' of a batched LLM server saturates near 100\% at \emph{every} load level, making GPU-busy metrics useless as load signals; decode batch occupancy is the signal that tracks load.
+LLM serving systems are queueing systems: requests arrive stochastically, occupy a batched server through distinct prefill and decode phases, and contend for KV-cache memory. I built a discrete-event simulator of batched LLM inference on a deliberately small cost model, two linear coefficients per phase, and asked whether it can \emph{predict} a real serving system rather than merely illustrate one. Fitting the model from 40 sequential probe requests and a concurrency sweep against vLLM running Qwen2.5-7B-Instruct on an NVIDIA L4, then replaying held-out Poisson workloads open-loop, the simulator predicted median time-to-first-token within 12\% and, after correcting a systematic error, end-to-end latency percentiles within 6--13\% at both 50\% and 80\% of saturation load. The correction itself is the most transferable finding: a latency intercept fitted over a network conflates per-request overhead with per-iteration GPU time, and charging it as GPU-blocking time inflates predicted tail latency by 37--60\%. Along the way the simulation reproduces the canonical continuous-vs-static batching results and surfaces an under-stated operational fact: busy-time ``utilization'' of a batched LLM server saturates near 100\% at \emph{every} load level, making GPU-busy metrics useless as load signals; decode batch occupancy is the signal that tracks load.
 \end{abstract}
 
 \section{Introduction}
 
-When an AI agent feels slow, the bottleneck is usually not the model's intelligence but the serving system's queueing behavior: how requests are batched, when prefill preempts decode, and how much headroom the operator left below saturation. These are classical operations research questions --- arrival processes, service-time distributions, scheduling policies, tail latency --- wearing a GPU costume.
+When an AI agent feels slow, the bottleneck is usually not the model's intelligence but the serving system's queueing behavior: how requests are batched, when prefill preempts decode, and how much headroom the operator left below saturation. These are classical operations research questions wearing a GPU costume: arrival processes, service-time distributions, scheduling policies, tail latency.
 
 This report does three things:
 
 \begin{enumerate}
   \item \textbf{Models} batched LLM serving as a discrete-event system with a two-phase linear cost model (\S\ref{sec:model}), implementing both iteration-level (continuous) batching in the style of Orca~\cite{orca} and vLLM~\cite{vllm}, and classic request-level (static) batching.
-  \item \textbf{Reproduces} the canonical serving results from first principles (\S\ref{sec:sim}): a $\sim$5$\times$ capacity gap between continuous and static batching, the tail-latency hockey stick, and the cost of arrival burstiness --- plus one less commonly plotted fact about utilization metrics.
+  \item \textbf{Reproduces} the canonical serving results from first principles (\S\ref{sec:sim}): a $\sim$5$\times$ capacity gap between continuous and static batching, the tail-latency hockey stick, and the cost of arrival burstiness, plus one less commonly plotted fact about utilization metrics.
   \item \textbf{Validates} the simulator against a real deployment (\S\ref{sec:validation}): vLLM 0.11 serving Qwen2.5-7B-Instruct on an NVIDIA L4, with coefficients fitted from cheap probes and accuracy assessed on held-out workloads the fitting never saw. Total GPU cost of the validation protocol: about \$1.
 \end{enumerate}
 
@@ -62,7 +62,7 @@ All experiments use 1{,}500-request workloads, 5 seeds, and min--max bands; load
 
 \subsection{Continuous vs.\ static batching}
 
-On the chat profile, continuous batching saturates at 5.10 requests/s against 1.05 for static batch-8 --- the expected $\sim$5$\times$ gap~\cite{orca,vllm}, here derived from queueing structure alone (Figure~\ref{fig:loadsweep}). Raising the static batch to 32 lifts capacity only to 1.70 rps, still below continuous batching capped at batch 8 (2.18 rps): padding waste does not average out (Figure~\ref{fig:frontier}).
+On the chat profile, continuous batching saturates at 5.10 requests/s against 1.05 for static batch-8, the expected $\sim$5$\times$ gap~\cite{orca,vllm}, here derived from queueing structure alone (Figure~\ref{fig:loadsweep}). Raising the static batch to 32 lifts capacity only to 1.70 rps, still below continuous batching capped at batch 8 (2.18 rps): padding waste does not average out (Figure~\ref{fig:frontier}).
 
 \begin{figure}[t]
   \centering
@@ -80,12 +80,12 @@ On the chat profile, continuous batching saturates at 5.10 requests/s against 1.
 
 \subsection{``Busy'' is not a load signal}
 
-Plotting p95 latency against busy-time utilization produced a degenerate figure: utilization is $\geq 0.97$ at \emph{every} offered load from 30\% to 98\% of capacity. The server never idles --- at low load it simply runs underfilled batches, paying nearly the full per-iteration cost ($\beta_d$ dominates) to produce few tokens. The metric that actually tracks load is decode batch occupancy (Figure~\ref{fig:busy}). Operationally: a dashboard showing ``GPU busy: 99\%'' says nothing about headroom; mean batch occupancy and queue depth do.
+Plotting p95 latency against busy-time utilization produced a degenerate figure: utilization is $\geq 0.97$ at \emph{every} offered load from 30\% to 98\% of capacity. The server never idles; at low load it simply runs underfilled batches, paying nearly the full per-iteration cost ($\beta_d$ dominates) to produce few tokens. The metric that actually tracks load is decode batch occupancy (Figure~\ref{fig:busy}). Operationally: a dashboard showing ``GPU busy: 99\%'' says nothing about headroom; mean batch occupancy and queue depth do.
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=\textwidth]{02_p95_vs_utilization.png}
-  \caption{Left: the tail-latency hockey stick vs.\ load. Right: busy-time utilization is flat at $\approx$1.0 across the entire sweep, while batch occupancy rises with load --- occupancy, not busyness, is the real signal.}
+  \caption{Left: the tail-latency hockey stick vs.\ load. Right: busy-time utilization is flat at $\approx$1.0 across the entire sweep, while batch occupancy rises with load. Occupancy, not busyness, is the real signal.}
   \label{fig:busy}
 \end{figure}
 
@@ -108,9 +108,9 @@ A simulator that only draws plausible curves is decoration. The test: fit the co
 
 \textbf{Serve.} vLLM 0.11.0, Qwen2.5-7B-Instruct (bf16), NVIDIA L4 on Modal; \texttt{max\_num\_seqs} 64, \texttt{max\_model\_len} 8192. The client runs on a laptop in Toronto; all measurements traverse the public internet, which turns out to matter (\S\ref{sec:attribution}).
 
-\textbf{Fit.} (i) A sequential prompt-length sweep (40 requests, 63--2{,}873 prompt tokens) fits the prefill line: $T_{\text{TTFT}} = 271.6\,\text{ms} + 0.288\,\text{ms/token}$ ($R^2 = 0.887$). (ii) A concurrency sweep ($c \in \{1,2,4,8,16,32\}$, fixed shapes, forced 128-token outputs) fits decode: $T_{\text{TPOT}} = 56.9\,\text{ms} + 0.67\,\text{ms/seq}$ ($R^2 = 0.702$). Batching is nearly free up to $c{=}16$ (58.7\,ms $\to$ 66\,ms per token) --- the measured economics behind \S\ref{sec:sim}.
+\textbf{Fit.} (i) A sequential prompt-length sweep (40 requests, 63--2{,}873 prompt tokens) fits the prefill line: $T_{\text{TTFT}} = 271.6\,\text{ms} + 0.288\,\text{ms/token}$ ($R^2 = 0.887$). (ii) A concurrency sweep ($c \in \{1,2,4,8,16,32\}$, fixed shapes, forced 128-token outputs) fits decode: $T_{\text{TPOT}} = 56.9\,\text{ms} + 0.67\,\text{ms/seq}$ ($R^2 = 0.702$). Batching is nearly free up to $c{=}16$ (58.7\,ms $\to$ 66\,ms per token), the measured economics behind \S\ref{sec:sim}.
 
-\textbf{Predict and replay.} The fitted simulator predicts L4 saturation at 1.46 rps on the chat profile. Two held-out Poisson workloads (250 requests each, unseen seeds) were replayed open-loop at 0.73 and 1.17 rps --- 50\% and 80\% of predicted capacity --- with exact output lengths forced via \texttt{ignore\_eos} so simulator and server process identical request sets. Maximum dispatch lag was 18\,ms, so the intended arrival process survived contact with the event loop.
+\textbf{Predict and replay.} The fitted simulator predicts L4 saturation at 1.46 rps on the chat profile. Two held-out Poisson workloads (250 requests each, unseen seeds) were replayed open-loop at 0.73 and 1.17 rps (50\% and 80\% of predicted capacity), with exact output lengths forced via \texttt{ignore\_eos} so simulator and server process identical request sets. Maximum dispatch lag was 18\,ms, so the intended arrival process survived contact with the event loop.
 
 \subsection{Results and error attribution}\label{sec:attribution}
 
@@ -131,7 +131,7 @@ overhead-attributed & 1.17 rps & $-15\%$ & $-33\%$ & $\mathbf{+13\%}$ & $\mathbf
 \label{tab:validation}
 \end{table}
 
-The raw fitted model nails TTFT but overpredicts end-to-end latency by 37--60\% (Table~\ref{tab:validation}). The cause is an attribution error, not a noise problem. The 272\,ms prefill intercept is dominated by \emph{per-request} overhead --- network round trips, API processing, tokenization, scheduling delay --- but the simulator charges $\beta_p$ on every prefill \emph{iteration} as GPU-blocking time during which all decodes stall. Real vLLM overlaps chunked prefill with decode, and a network round trip blocks nobody's decode. At 0.73 rps over a 354\,s window, the phantom serialized time is roughly $258 \times 240\,\text{ms} \approx 62\,\text{s}$ of fictitious server busyness.
+The raw fitted model nails TTFT but overpredicts end-to-end latency by 37--60\% (Table~\ref{tab:validation}). The cause is an attribution error, not a noise problem. The 272\,ms prefill intercept is dominated by \emph{per-request} overhead (network round trips, API processing, tokenization, scheduling delay), but the simulator charges $\beta_p$ on every prefill \emph{iteration} as GPU-blocking time during which all decodes stall. Real vLLM overlaps chunked prefill with decode, and a network round trip blocks nobody's decode. At 0.73 rps over a 354\,s window, the phantom serialized time is roughly $258 \times 240\,\text{ms} \approx 62\,\text{s}$ of fictitious server busyness.
 
 Re-running the prediction with 240\,ms of the intercept reattributed as non-blocking per-request overhead collapses e2e error to $+6$--$13\%$ at both load levels (Figure~\ref{fig:validation}); the predicted and observed e2e CDFs nearly coincide. The correction is not free: a constant offset cannot model TTFT \emph{variance}, so predicted TTFT tails become too tight ($-33\%$ at p95). A proper treatment would fit per-request overhead as a distribution and model chunked prefill; both are future work.
 
@@ -148,7 +148,7 @@ Two failure modes consumed real debugging time and generalize to any inference b
 
 \paragraph{Prefix caching invalidates repeated prompts.} An earlier fitting run against a local Ollama server (qwen2.5:3b, Apple M3~Pro) produced repetitions with flat 0.13\,s TTFT regardless of prompt length, against 5.6\,s cold at 2{,}834 tokens: the server's prompt cache skipped prefill for identical prompts, so three of four ``repetitions'' measured the cache. Servers cache by longest matching prefix; the fix is a unique nonce at the \emph{start} of every benchmark prompt. (With caching defeated, the same protocol fit the M3~Pro cleanly: $10.2\,\text{ms} + 1.925\,\text{ms/token}$, $R^2 = 0.999$.)
 
-\paragraph{Fitted intercepts conflate overhead classes.} As \S\ref{sec:attribution} shows, a latency intercept fitted over a network bundles per-request costs with per-iteration GPU costs. Any model that serializes the former across concurrent work will overpredict latency under load --- by 37--60\% in this setup. Separating the classes requires either server-side timing or an explicit overhead term; assuming the split is the current method's main internal threat to validity.
+\paragraph{Fitted intercepts conflate overhead classes.} As \S\ref{sec:attribution} shows, a latency intercept fitted over a network bundles per-request costs with per-iteration GPU costs. Any model that serializes the former across concurrent work will overpredict latency under load, by 37--60\% in this setup. Separating the classes requires either server-side timing or an explicit overhead term; assuming the split is the current method's main internal threat to validity.
 
 \section{Limitations}
 
@@ -156,7 +156,7 @@ The validation covers one model, one GPU, one workload family, two below-saturat
 
 \section{Outlook}
 
-The natural next step is to use the queueing frame for what it is good at: deriving operating rules. Heavy-traffic approximations should yield closed-form headroom rules of the form ``for this arrival burstiness and service-time CV, run at $\rho^*$ to hold p95 below $X$'' --- checkable against the L4 traces already collected. On the systems side: chunked-prefill modeling, fitted overhead distributions, and scheduler variants (shortest-prefill-first, deadline-aware) that the simulator can evaluate without renting another GPU.
+The natural next step is to use the queueing frame for what it is good at: deriving operating rules. Heavy-traffic approximations should yield closed-form headroom rules of the form ``for this arrival burstiness and service-time CV, run at $\rho^*$ to hold p95 below $X$'', checkable against the L4 traces already collected. On the systems side: chunked-prefill modeling, fitted overhead distributions, and scheduler variants (shortest-prefill-first, deadline-aware) that the simulator can evaluate without renting another GPU.
 
 \appendix
 
