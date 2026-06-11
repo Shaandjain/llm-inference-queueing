@@ -26,12 +26,14 @@ def simulate_continuous(
     max_batch: int = 64,
     max_prefill_tokens: int = 8192,
 ) -> SimResult:
-    """Iteration-level (continuous) batching, Orca/vLLM-style.
+    """Simplified iteration-level (continuous) batching.
 
     Each engine iteration is either a prefill of newly admitted requests or
     one decode step for every active sequence. Prefill is prioritized when
-    admissible work is waiting (vLLM default behavior — raises TBT under
-    load, which is part of what we want to observe).
+    admissible work is waiting. This captures the queueing structure of
+    Orca/vLLM-style continuous batching, but it is not a full model of modern
+    vLLM V1 scheduling: chunked prefill and decode-first token-budget packing
+    are intentionally left for the next fidelity step.
 
     Simplification: the full KV footprint (input + output tokens) is reserved
     at admission, i.e. the scheduler knows output lengths in advance. This
