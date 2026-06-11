@@ -3,62 +3,56 @@
 
 # Queueing the Transformer: why AI agents feel slow before the GPU is full
 
-I build AI systems for clients during the day. The complaint is never "the model is dumb." It's "the agent is slow." This summer I went one layer down to understand why, and the answer turned out to live in my industrial engineering coursework, not in the model weights: LLM serving is a queueing problem.
+There's a specific moment I've lived through more times than I'd like. I'm demoing an AI system to a client, someone asks it a question, and then we all sit there watching the cursor blink. Three seconds. Five. The answer that eventually streams out is good, but the silence already did its damage. Nobody in that room is thinking "the model is dumb." They're thinking "this is slow."
 
-So I built a discrete-event simulator of batched LLM inference, the kind of thing you'd build to model a factory floor or a hospital ER, and then did the part that usually gets skipped: I tested whether it could predict a real serving system, not just draw plausible curves.
+That's my day job. I'm a forward-deployed engineer at an AI studio, which means I build agents, retrieval systems, and MCP servers that real teams at real companies use, things like document Q&A over dense legal text and multi-step agent workflows. I live at the last mile between a model and a user. And at the last mile, latency isn't a metric. It's the product.
 
-**TL;DR:** a two-coefficient-per-phase linear cost model, fitted from 40 cheap probe requests, predicted real vLLM end-to-end latency within 6 to 13 percent on held-out workloads. Getting there required diagnosing a 40 to 60 percent systematic error first, and that diagnosis is the most useful thing in this post. Total GPU bill for the validation: about $1.
+The question that started this project came from a client, paraphrased: "this works great in the demo, but what happens when our whole team is on it at once?" My honest answer at the time was a shrug with extra words. The serving layer underneath my apps was a black box I paid by the token. I decided to stop shrugging.
 
-## The model is almost embarrassingly simple
+## The part where my degree finally pays off
 
-An LLM server runs iterations. A prefill iteration ingests prompts and costs `base + per_token × prompt_tokens`. A decode iteration emits one token for every active sequence and costs `base + per_seq × batch_size`. Requests arrive randomly, wait in a queue, get batched, and leave. That's the whole model. Four coefficients.
+Here's the thing: I'm an industrial engineering student. I've spent semesters on queueing theory and discrete-event simulation, modeling factory lines and service systems where things arrive randomly, wait in line, get processed in batches, and leave. Wait times, utilization, tail behavior under load.
 
-From just that structure, the simulator reproduces the canonical serving results. Continuous batching (vLLM-style, where requests join between decode steps) carries about 5x the load of classic static batching. Cranking static batch size to 32 doesn't fix it; padding waste means it still loses to continuous batching capped at 8.
+At some point it clicked that a GPU serving an LLM is exactly that object. Requests arrive stochastically. They wait in a queue. They get batched. They occupy a server through two distinct phases: prefill (reading your prompt) and decode (writing the answer one token at a time). They contend for memory. Every reason my clients' agents feel slow lives in that pipeline, and it's the same math as the factory floor.
+
+So I built the thing my coursework trained me to build: a discrete-event simulator of LLM serving. Then I did the part that usually gets skipped in side projects. I tested whether it could predict a real serving system, not just draw plausible curves.
+
+**TL;DR:** a cost model with two linear coefficients per phase, fitted from 40 cheap probe requests, predicted real vLLM end-to-end latency within 6 to 13 percent on workloads it had never seen. Getting there required diagnosing a 40 to 60 percent systematic error first, and that diagnosis taught me more than the success did. Total GPU bill: about a dollar.
+
+## What the simulator showed
+
+The model is almost embarrassingly simple. A prefill step costs `base + per_token × prompt_tokens`. A decode step emits one token for every active request and costs `base + per_seq × batch_size`. Four coefficients. From just that structure, the canonical serving results fall out: continuous batching (vLLM-style, where requests join between decode steps) carries about 5x the load of old-school static batching, and cranking the static batch size up doesn't save it.
 
 ![Continuous vs static batching](01_load_sweep.png)
 
-## The finding I didn't expect: "busy" is a lie
+But the finding that changed how I'll think about production systems was an accident. I went to plot the classic queueing hockey stick, p95 latency against utilization (p95 meaning the experience of your unluckiest one-in-twenty users), and got a broken-looking chart. Busy-time utilization was pinned at 97+ percent at every load level, from 30 percent of capacity to 98.
 
-I went to plot the classic queueing hockey stick, p95 latency against utilization, and got a degenerate chart. Busy-time utilization was at least 97 percent at every load level, from 30 percent of capacity all the way to 98 percent.
-
-The server never idles. At low load it just runs tiny, underfilled batches, paying nearly the full iteration cost to produce a trickle of tokens. The metric that actually tracks load is decode batch occupancy.
+The server never idles. At low load it just runs tiny, underfilled batches, paying nearly the full cost of each step to produce a trickle of tokens. The signal that actually tracks load is batch occupancy: how full the batches are, not whether the GPU looks busy.
 
 ![Busy saturates immediately](02_p95_vs_utilization.png)
 
-If your GPU dashboard says "99 percent busy," you have learned approximately nothing about your headroom. Watch batch occupancy and queue depth instead.
+This one matters for my day job directly. "GPU busy: 99%" on a dashboard tells you nothing about headroom. And the related result: bursty traffic, which is exactly what agents generate with their tool-call fan-outs and retries, roughly doubles tail latency compared to smooth traffic at the same average rate. When a client asks "can this handle the team?", average load was never the right thing to estimate. The bursts are.
 
-Also from the simulator: at the same mean arrival rate, bursty traffic (think agents doing tool-call fan-outs and retries) roughly doubles p95 time-to-first-token compared to smooth Poisson arrivals. Capacity planning on mean load systematically under-provisions agentic workloads.
+## Making it face reality
 
-## Then I made it face reality
+A simulator that only makes charts is decoration. So: deploy vLLM with a 7B model on a rented NVIDIA L4, fit the four coefficients from cheap probes, have the simulator predict the GPU's saturation point (it said 1.46 requests/s), then replay two held-out workloads against the real server at 50 and 80 percent of that predicted capacity, open-loop, meaning requests fire on schedule whether or not earlier ones have finished, just like real users. Compare predicted versus observed latency distributions.
 
-A simulator that only makes pretty charts is decoration. The test protocol:
+First result: time-to-first-token predicted within 12 percent. End-to-end latency overpredicted by 37 to 60 percent. Ouch.
 
-1. Deploy vLLM with Qwen2.5-7B-Instruct on an NVIDIA L4 (Modal, scale-to-zero).
-2. Fit the four coefficients from cheap probes: a 40-request prompt-length sweep for prefill, a concurrency sweep for decode.
-3. Have the simulator predict the L4's saturation point (it said 1.46 requests/s).
-4. Replay two held-out workloads the fitting never saw, open-loop, at 50 and 80 percent of that predicted capacity.
-5. Compare predicted vs observed latency distributions on identical request sets.
-
-The fits themselves were satisfying. Prefill: TTFT = 271.6ms + 0.288ms per token. Decode: 56.9ms + 0.67ms per sequence, which means batching is nearly free up to batch 16. That one fitted line is the entire economic argument for continuous batching, measured directly.
-
-## The 60 percent error that taught me the most
-
-First validation results: time-to-first-token predicted within 12 percent. End-to-end latency overpredicted by 37 to 60 percent. Ouch.
-
-But the error had a shape, and the shape pointed at the cause. That 272ms prefill intercept I fitted? It's mostly not GPU time. It's network round trips from my laptop in Toronto, API processing, tokenization. Per-request overhead. My simulator was charging it as GPU-blocking time on every prefill iteration, during which every other request's decode stalls. Real vLLM overlaps prefill with decode, and a network round trip blocks nobody.
-
-Reattribute 240ms of the intercept as non-blocking per-request overhead and the end-to-end error collapses to 6 to 13 percent at both load levels. The predicted and observed latency CDFs nearly coincide.
+But the error had a shape, and the shape pointed at the cause. The 272ms intercept I'd fitted onto prefill was mostly not GPU time at all. It was network round trips from my laptop in Toronto, API processing, tokenization. Per-request overhead. My simulator was charging it as GPU-blocking time on every prefill, during which every other request's decode stalls. The real server overlaps that work; a network round trip blocks nobody. Reattribute 240ms of the intercept as non-blocking overhead and rerun: end-to-end error collapses to 6 to 13 percent. The predicted and observed distributions nearly coincide.
 
 ![Predicted vs observed](05_validation_overhead-ablation.png)
 
-The transferable lesson: **a latency intercept fitted over a network conflates two kinds of overhead, and any model that serializes per-request overhead across concurrent work will overpredict latency under load.** If you're benchmarking inference from outside the datacenter, you will hit this.
+The transferable lesson, and the one I'd put on a poster for anyone benchmarking inference from outside the datacenter: **a latency intercept fitted over a network mixes two kinds of overhead, and any model that serializes per-request overhead across concurrent work will overpredict latency under load.**
 
-Honorable mention for a second trap: my first fitting run repeated identical prompts, and the server's prefix cache silently skipped prefill on the repeats. Flat 0.13s TTFT at every prompt length, versus 5.6s cold. Three of my four "repetitions" were measuring the cache. Every benchmark prompt now starts with a unique nonce.
+Runner-up lesson: my first fitting run repeated identical prompts, and the server's prefix cache silently skipped prefill on the repeats. Three of my four "measurements" at each prompt length were measuring the cache, not the model. Every benchmark prompt I send now starts with a unique nonce. If your eval or load test reuses prompts, check whether you're testing the model or its cache.
 
-## What this is and isn't
+## Why an applications engineer should care about any of this
 
-None of the simulation findings are new science; Orca and the vLLM paper established the batching results, and serious serving simulators like Vidur exist. What I wanted, and got, was the full loop: measure a real system, model it, predict, be wrong, diagnose why, quantify the fix, and state the remaining error honestly (predicted TTFT tails are too tight by 33 percent, because a constant offset can't model scheduling jitter; it's in the limitations section).
+I didn't do this to become a kernel engineer. I did it because the inference layer decides what my products can feel like, and "the model is thinking" stopped being an acceptable thing for me to say to a client. After two weeks and a dollar of GPU time, I can answer capacity questions with a fitted model instead of a shrug, I know which dashboard metrics are lies, and I know two benchmarking traps that would have quietly corrupted any latency numbers I put in front of a stakeholder.
 
-Everything is open: simulator, experiments, raw traces, fitted profiles, the paper, and one-command reproduction. The repo is [github.com/Shaandjain/llm-inference-queueing](https://github.com/Shaandjain/llm-inference-queueing).
+None of the simulation findings are new science; the batching results date to the Orca and vLLM papers, and serious serving simulators exist. What I wanted was the full loop: measure a real system, model it, predict, be wrong, diagnose why, quantify the fix, and state the remaining error honestly (predicted TTFT tails are too tight by 33 percent; it's in the limitations section of the writeup).
 
-Next up in the series: deriving headroom rules from queueing theory ("given this burstiness, run at X percent utilization to hold your p95") and checking them against the traces I already have. After that, the same measurement discipline goes after a bigger question: when should an agent use RAG, long context, or memory? Context is an inference budget. More soon.
+Everything is open: the simulator, raw traces, fitted profiles, a paper-style writeup, and one-command reproduction. [github.com/Shaandjain/llm-inference-queueing](https://github.com/Shaandjain/llm-inference-queueing).
+
+Next in the series: turning the queueing frame into operating rules ("given this burstiness, run at X percent utilization to hold your p95"), and then pointing the same measurement discipline at the question my client work actually revolves around: when should an agent use RAG, long context, or memory? Context is an inference budget. More soon.
