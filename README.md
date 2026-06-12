@@ -58,7 +58,6 @@ These figures use hand-set illustrative coefficients, not the fitted L4 profile.
 | Model | Qwen2.5-7B-Instruct |
 | Precision | bf16 |
 | GPU / platform | NVIDIA L4 on Modal |
-| Client location | Toronto laptop over public internet |
 | `max_num_seqs` | 64 |
 | `max_model_len` | 8192 |
 | `max_num_batched_tokens` | vLLM default (not explicitly set) |
