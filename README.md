@@ -76,6 +76,8 @@ Can the simulator *predict* a real serving system? Protocol: fit coefficients fr
 | overhead-attributed @ 0.73 rps | −15% | −33% | **+6%** | **+9%** |
 | overhead-attributed @ 1.17 rps | −15% | −33% | **+13%** | **+11%** |
 
+**What actually happened.** The first version of the experiment was wrong in two useful ways: repeated prompts accidentally benchmarked prefix caching instead of prefill, and the fitted network intercept got charged as serialized GPU time. Most of the value came from finding those errors, not from the first clean plots.
+
 **The error had a diagnosable cause.** The raw model overestimated e2e latency 37–60% because the fitted 272ms prefill intercept, which bundles per-request overhead (network RTT, API processing, tokenization) with GPU-blocking iteration time, gets charged by the simulator as GPU time on *every prefill iteration*, stalling all decodes. Real vLLM does not serialize frontend/request overhead this way, and modern vLLM can interleave chunked prefill with decode. Reattributing 240ms of the intercept to non-blocking per-request overhead (`--request-overhead-s` ablation) collapses e2e error to +6–13% at both load levels ([CDFs](analysis/plots/05_validation_overhead-ablation.png), `results/validation*.json`). This is error attribution, not an independently measured overhead split; the remaining TTFT p95 gap (−33%) is real because observed TTFT has scheduling variance a constant offset can't model.
 
 ![Predicted vs observed CDFs](analysis/plots/05_validation_overhead-ablation.png)
